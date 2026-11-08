@@ -1,0 +1,9 @@
+/target
+/web/node_modules
+/web/dist
+/panel.toml
+/panel-data
+/dev-server
+/bridge/TushonkaPanelBridge/bin
+/bridge/TushonkaPanelBridge/obj
+/bridge/dist

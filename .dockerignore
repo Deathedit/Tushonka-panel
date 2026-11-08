@@ -1,0 +1,9 @@
+target
+web/node_modules
+web/dist
+dev-server
+panel-data
+panel.toml
+data
+spt
+.git

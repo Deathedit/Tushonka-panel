@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Companion server mod for Tushonka Panel.
+
+    Build against an installed server (folder containing SPTarkov.Server.Core.dll):
+      dotnet build -c Release -p:SptDir=/path/to/server
+    or against a server-csharp source checkout:
+      dotnet build -c Release -p:SptSourceDir=/path/to/server-csharp
+
+    Output: bin/Release/net10.0/TushonkaPanelBridge.dll  ->  copy into user/mods/TushonkaPanelBridge/
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>TushonkaPanelBridge</AssemblyName>
+    <RootNamespace>TushonkaPanelBridge</RootNamespace>
+    <Version>0.1.0</Version>
+    <OutputType>Library</OutputType>
+    <!-- The server already ships every dependency; only our own DLL goes into user/mods. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SptDir Condition="'$(SptDir)' == ''">$(MSBuildThisFileDirectory)../../server</SptDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SptSourceDir)' != ''">
+    <ProjectReference Include="$(SptSourceDir)/Libraries/SPTushonka.Common/SPTushonka.Common.csproj" Private="false" />
+    <ProjectReference Include="$(SptSourceDir)/Libraries/SPTushonka.DI/SPTushonka.DI.csproj" Private="false" />
+    <ProjectReference Include="$(SptSourceDir)/Libraries/SPTushonka.Server.Core/SPTushonka.Server.Core.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SptSourceDir)' == ''">
+    <Reference Include="SPTarkov.Common"><HintPath>$(SptDir)/SPTarkov.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SPTarkov.DI"><HintPath>$(SptDir)/SPTarkov.DI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SPTarkov.Server.Core"><HintPath>$(SptDir)/SPTarkov.Server.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SemanticVersioning"><HintPath>$(SptDir)/SemanticVersioning.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

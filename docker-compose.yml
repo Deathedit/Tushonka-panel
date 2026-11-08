@@ -1,0 +1,13 @@
+services:
+  tushonka:
+    build: .
+    image: tushonka-panel:latest
+    init: true                 # reaps any grandchild processes of the server
+    restart: unless-stopped
+    stop_grace_period: 40s     # lets the panel stop the server cleanly so profiles are saved
+    ports:
+      - "8080:8080"            # panel
+      - "6969:6969"            # game server (http.json "ip" must be 0.0.0.0 inside the container)
+    volumes:
+      - ./data:/data           # panel.toml, backups, client files, trash
+      - ./spt:/srv/spt         # the server folder: SPT.Server.Linux, SPT_Data/, user/
