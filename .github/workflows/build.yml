@@ -257,6 +257,8 @@ jobs:
             type=sha
 
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           push: ${{ needs.version.outputs.publish == 'true' }}
@@ -273,10 +275,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only our own artifacts: the run also holds a .dockerbuild record from the image build.
       - uses: actions/download-artifact@v4
         with:
+          name: panel-linux-x86_64
           path: artifacts
-          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge-mod-zip
+          path: artifacts
 
       # Creates the tag on this commit if it does not exist yet. A tag created with the
       # workflow token does not start another run.
