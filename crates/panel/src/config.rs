@@ -16,6 +16,10 @@ pub struct PanelConfig {
     pub executable: String,
     /// Extra arguments passed to the server.
     pub args: Vec<String>,
+    /// Run the server through this .NET host (e.g. "dotnet") as `dotnet <executable>.dll` instead of
+    /// the native launcher. Needed where the release's launcher binary cannot run, such as NixOS
+    /// without nix-ld. Empty = run the launcher directly.
+    pub dotnet: String,
     /// Config folder, relative to `server_dir`.
     pub configs_dir: PathBuf,
     /// Panel state (backups, client files, trash), relative to the panel config file unless absolute.
@@ -28,6 +32,10 @@ pub struct PanelConfig {
     pub stop_timeout_secs: u64,
     /// Localhost port for the TushonkaPanelBridge server mod (Database / Profiles).
     pub bridge_port: u16,
+    /// Check GitHub for new server releases every few hours.
+    pub update_check: bool,
+    /// GitHub repository with the server releases.
+    pub update_repo: String,
     /// Admin account; `None` until first-run setup.
     pub admin: Option<AdminAccount>,
 }
@@ -46,12 +54,15 @@ impl Default for PanelConfig {
             server_dir: PathBuf::from("./server"),
             executable: "SPT.Server.Linux".into(),
             args: Vec::new(),
+            dotnet: String::new(),
             configs_dir: PathBuf::from("SPT_Data/configs"),
             data_dir: PathBuf::from("./panel-data"),
             autostart: false,
             auto_restart: false,
             stop_timeout_secs: 20,
             bridge_port: 6970,
+            update_check: true,
+            update_repo: "SP-Tushonka/build".into(),
             admin: None,
         }
     }
@@ -107,6 +118,15 @@ impl PanelConfig {
         };
         raw.admin = Some(admin.clone());
         raw.save(path)
+    }
+
+    /// The file that must exist to start the server: the launcher, or `<executable>.dll` in dotnet mode.
+    pub fn entry_file(&self) -> PathBuf {
+        if self.dotnet.trim().is_empty() {
+            self.server_dir.join(&self.executable)
+        } else {
+            self.server_dir.join(format!("{}.dll", self.executable))
+        }
     }
 
     pub fn configs_path(&self) -> PathBuf {

@@ -11,19 +11,28 @@
   import Settings from './pages/Settings.svelte';
   import Database from './pages/Database.svelte';
   import Profiles from './pages/Profiles.svelte';
+  import Updates from './pages/Updates.svelte';
 
   const PAGES = [
     { id: 'console', label: 'Console', idx: '01' },
     { id: 'mods', label: 'Mods', idx: '02' },
     { id: 'settings', label: 'Settings', idx: '03' },
-    { id: 'database', label: 'Database', idx: '04', group: 'data' },
-    { id: 'profiles', label: 'Profiles', idx: '05', group: 'data' },
+    { id: 'updates', label: 'Updates', idx: '04' },
+    { id: 'database', label: 'Database', idx: '05', group: 'data' },
+    { id: 'profiles', label: 'Profiles', idx: '06', group: 'data' },
   ];
 
   let auth = $state({ loading: true, setup: false, authed: false });
   let info = $state(null);
   let page = $state(currentPage());
   let busy = $state(false);
+  let update = $state(null);
+
+  async function loadUpdate() {
+    try {
+      update = await api.get('/api/update');
+    } catch {}
+  }
 
   function currentPage() {
     const id = location.hash.replace(/^#\/?/, '');
@@ -37,6 +46,7 @@
       if (s.authenticated) {
         info = await api.get('/api/status');
         live.start();
+        loadUpdate();
       } else {
         live.stop();
       }
@@ -66,9 +76,13 @@
   onMount(() => {
     setUnauthorizedHandler(() => checkAuth());
     checkAuth();
+    const upTimer = setInterval(() => auth.authed && loadUpdate(), 10 * 60 * 1000);
     const onHash = () => (page = currentPage());
     addEventListener('hashchange', onHash);
-    return () => removeEventListener('hashchange', onHash);
+    return () => {
+      removeEventListener('hashchange', onHash);
+      clearInterval(upTimer);
+    };
   });
 
   let st = $derived(live.status ?? info?.status ?? null);
@@ -90,8 +104,13 @@
       <span class="pill st-{runState}"><span class="dot"></span>{STATE_LABEL[runState]}</span>
       <span class="lbl">Uptime <span class="mono val">{uptime}</span></span>
       {#if !live.connected}<span class="tag err">Reconnecting</span>{/if}
+      {#if update?.job?.running}
+        <a class="tag acc" href="#/updates">Updating…</a>
+      {:else if update?.available}
+        <a class="tag acc" href="#/updates">Update {update.latest.tag} available</a>
+      {/if}
       <span class="spacer"></span>
-      <button class="btn pri" type="button" onclick={() => control('start')} disabled={busy || alive || runState === 'stopping'}>
+      <button class="btn pri" type="button" onclick={() => control('start')} disabled={busy || alive || runState === 'stopping' || update?.job?.running}>
         <Icon name="play" />Start
       </button>
       <button class="btn" type="button" onclick={() => control('restart')} disabled={busy || !alive}>
@@ -109,6 +128,7 @@
           {#each PAGES.filter((p) => !p.group) as p}
             <a class="nav" class:on={page === p.id} href="#/{p.id}" aria-current={page === p.id ? 'page' : undefined}>
               <span class="idx">{p.idx}</span>{p.label}
+              {#if p.id === 'updates' && update?.available}<span class="newdot" title="Update available"></span>{/if}
             </a>
           {/each}
         </div>
@@ -158,6 +178,8 @@
           <Mods />
         {:else if page === 'settings'}
           <Settings {alive} />
+        {:else if page === 'updates'}
+          <Updates onChange={(u) => (update = u)} />
         {:else if page === 'database'}
           <Database status={st} />
         {:else if page === 'profiles'}
@@ -193,6 +215,7 @@
   .kv dt { color: var(--dim); }
   .kv dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   .kv dd.live { color: var(--ok); }
+  .newdot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--acc); }
   @media (max-width: 800px) {
     .top { padding: 10px 16px; gap: 8px 12px; }
     .side { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; gap: 4px 16px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }

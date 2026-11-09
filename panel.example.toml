@@ -5,11 +5,15 @@ bind = "0.0.0.0:8080"           # where the panel listens
 server_dir = "./server"         # folder with SPT.Server.Linux, sptLogger.json, SPT_Data/, user/
 executable = "SPT.Server.Linux" # SPT.Server.exe on Windows builds is not supported; use the Linux build
 args = []
+dotnet = ""                     # set to "dotnet" to run `dotnet SPT.Server.Linux.dll` (needed on NixOS without nix-ld)
 configs_dir = "SPT_Data/configs" # relative to server_dir
 data_dir = "./panel-data"       # backups, client files, trash
 autostart = false               # start the server when the panel starts
 auto_restart = false            # restart the server if it crashes
 stop_timeout_secs = 20          # wait after Ctrl+C before SIGTERM, then SIGKILL
+bridge_port = 6970              # localhost port of the TushonkaPanelBridge mod
+update_check = true             # look for new server releases every 6 hours
+update_repo = "SP-Tushonka/build"
 
 # The [admin] section is written by the first-run setup in the browser.
 # Env overrides: TUSHONKA_PANEL_CONFIG, TUSHONKA_SERVER_DIR, TUSHONKA_DATA_DIR, TUSHONKA_BIND

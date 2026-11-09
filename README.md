@@ -6,6 +6,14 @@ A web panel for the [SP-Tushonka server](https://github.com/SP-Tushonka/server-c
 - **Start / stop / restart**: stop sends Ctrl+C so the server shuts down normally and saves profiles. If it hangs, the panel escalates to SIGTERM and then SIGKILL.
 - **Mods**: drag-and-drop `.zip` install, enable/disable, delete (moved to a trash folder). Client-side files (`BepInEx/`) in an archive are stored for download, since they belong on the game PC.
 - **Settings**: a form editor and raw JSON editor for `SPT_Data/configs/*.json`. The previous version is backed up on every save.
+- **Updates**: checks [SP-Tushonka/build](https://github.com/SP-Tushonka/build/releases) for new releases and installs one with a click:
+  1. downloads the `.7z` and verifies its published SHA-256
+  2. stops the server
+  3. moves the current program files to a backup (`user/` is never touched)
+  4. installs the new version and keeps configs you edited
+  5. starts the server again
+
+  Edited configs are detected with the release's own `checks.dat` hashes. They keep your values and gain any keys the new version added. Every backup can be restored with one click, and a restore can itself be undone.
 - **Login**: an admin account is created on first run. Passwords are hashed with Argon2id, the session cookie is HttpOnly and SameSite=Strict, and requests from other origins are refused.
 
 One self-contained binary: the Svelte UI is embedded.
@@ -38,6 +46,8 @@ cp panel.example.toml panel.toml               # set server_dir to your server f
 ```
 
 `server_dir` is the folder that contains `SPT.Server.Linux`, `sptLogger.json`, `SPT_Data/` and `user/`. The server refuses to start from any other working directory, and the panel always launches it from there.
+
+**NixOS:** the release's `SPT.Server.Linux` launcher expects a standard Linux loader. Without `nix-ld`, set `dotnet = "dotnet"` in panel.toml so the panel runs `dotnet SPT.Server.Linux.dll` instead. The panel prints this hint in the console when the launcher fails with exit code 127.
 
 To reach the game server from other machines, set `"ip": "0.0.0.0"` in `http.json`. The Settings page warns when it is `127.0.0.1`.
 

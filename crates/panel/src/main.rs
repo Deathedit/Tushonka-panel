@@ -4,6 +4,7 @@ mod configs;
 mod fsutil;
 mod mods;
 mod supervisor;
+mod updater;
 mod web;
 
 use std::net::SocketAddr;
@@ -44,8 +45,8 @@ async fn main() -> Result<()> {
     let cfg = Arc::new(config::PanelConfig::load_or_create(&cfg_path)?);
     std::fs::create_dir_all(&cfg.data_dir).with_context(|| format!("creating {}", cfg.data_dir.display()))?;
     tracing::info!(server_dir = %cfg.server_dir.display(), "config loaded from {}", cfg_path.display());
-    if !cfg.server_dir.join(&cfg.executable).is_file() {
-        tracing::warn!("server executable not found at {} (set server_dir / executable in {})", cfg.server_dir.join(&cfg.executable).display(), cfg_path.display());
+    if !cfg.entry_file().is_file() {
+        tracing::warn!("server executable not found at {} (set server_dir / executable in {})", cfg.entry_file().display(), cfg_path.display());
     }
 
     let auth = Arc::new(auth::Auth::new(cfg.admin.clone()));
@@ -59,7 +60,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    let state = web::AppState { cfg: cfg.clone(), cfg_path, auth, sup: sup.clone() };
+    let updater = updater::Updater::new(cfg.clone(), sup.clone());
+    let state = web::AppState { cfg: cfg.clone(), cfg_path, auth, sup: sup.clone(), updater };
     let app = web::router(state);
     let listener = tokio::net::TcpListener::bind(&cfg.bind).await.with_context(|| format!("binding {}", cfg.bind))?;
     tracing::info!("panel listening on http://{}", cfg.bind);

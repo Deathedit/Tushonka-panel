@@ -20,6 +20,7 @@ use tokio::io::AsyncWriteExt;
 use crate::auth::{self, Auth};
 use crate::config::PanelConfig;
 use crate::supervisor::{Event, Supervisor};
+use crate::updater::Updater;
 use crate::{configs, fsutil, mods};
 
 #[derive(Clone)]
@@ -28,6 +29,7 @@ pub struct AppState {
     pub cfg_path: PathBuf,
     pub auth: Arc<Auth>,
     pub sup: Arc<Supervisor>,
+    pub updater: Arc<Updater>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -48,6 +50,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bridge/{*path}", get(bridge_proxy).post(bridge_proxy).patch(bridge_proxy).delete(bridge_proxy))
         .route("/api/bridge-mod", get(bridge_mod_info))
         .route("/api/bridge-mod/install", post(bridge_mod_install))
+        .route("/api/update", get(update_info))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/start", post(update_start))
+        .route("/api/update/rollback", post(update_rollback))
+        .route("/api/update/backups/{name}", delete(update_delete_backup))
         .route("/api/logs", get(logs_list))
         .route("/api/logs/{dir}/{file}", get(logs_get))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -182,7 +189,7 @@ async fn auth_logout(State(st): State<AppState>, headers: HeaderMap) -> Response
 // ---------- server control ----------
 
 async fn status(State(st): State<AppState>) -> Json<serde_json::Value> {
-    let exe = st.cfg.server_dir.join(&st.cfg.executable);
+    let exe = st.cfg.entry_file();
     Json(json!({
         "status": st.sup.status(),
         "panel_version": env!("CARGO_PKG_VERSION"),
@@ -193,7 +200,15 @@ async fn status(State(st): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
+fn ensure_not_updating(st: &AppState) -> ApiResult<()> {
+    if st.updater.busy() {
+        return Err(ApiError(StatusCode::CONFLICT, "an update is in progress".into()));
+    }
+    Ok(())
+}
+
 async fn server_start(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    ensure_not_updating(&st)?;
     st.sup.start()?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -204,6 +219,7 @@ async fn server_stop(State(st): State<AppState>) -> ApiResult<Json<serde_json::V
 }
 
 async fn server_restart(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    ensure_not_updating(&st)?;
     let sup = st.sup.clone();
     // Restart can take a while (graceful stop); don't hold the request open for it.
     tokio::spawn(async move {
@@ -412,6 +428,44 @@ async fn bridge_mod_install(State(st): State<AppState>) -> ApiResult<Json<serde_
     fsutil::write_atomic(&dir.join(BRIDGE_DLL), &dll.data)?;
     st.sup.mark_restart_required();
     tracing::info!("installed bundled TushonkaPanelBridge into {}", dir.display());
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------- updates ----------
+
+#[derive(Deserialize)]
+struct UpdateStart {
+    tag: String,
+}
+
+#[derive(Deserialize)]
+struct Rollback {
+    backup: String,
+}
+
+async fn update_info(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let up = st.updater.clone();
+    Json(tokio::task::spawn_blocking(move || up.snapshot()).await.unwrap_or_default())
+}
+
+async fn update_check(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    st.updater.check().await?;
+    Ok(update_info(State(st)).await)
+}
+
+async fn update_start(State(st): State<AppState>, Json(req): Json<UpdateStart>) -> ApiResult<Json<serde_json::Value>> {
+    st.updater.start_update(&req.tag)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn update_rollback(State(st): State<AppState>, Json(req): Json<Rollback>) -> ApiResult<Json<serde_json::Value>> {
+    st.updater.start_rollback(&req.backup)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn update_delete_backup(State(st): State<AppState>, Path(name): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let up = st.updater.clone();
+    tokio::task::spawn_blocking(move || up.delete_backup(&name)).await??;
     Ok(Json(json!({ "ok": true })))
 }
 

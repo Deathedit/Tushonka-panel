@@ -151,13 +151,18 @@ impl Supervisor {
         if inner.proc.is_some() {
             bail!("the server is already running");
         }
-        let exe = self.cfg.server_dir.join(&self.cfg.executable);
-        if !exe.is_file() {
-            bail!("server executable not found: {}", exe.display());
+        let entry = self.cfg.entry_file();
+        if !entry.is_file() {
+            bail!("server executable not found: {}", entry.display());
         }
+        let host = self.cfg.dotnet.trim();
+        let exe = if host.is_empty() { entry.clone() } else { std::path::PathBuf::from(host) };
 
         let pair = native_pty_system().openpty(inner.size).context("opening a pseudo-terminal")?;
         let mut cmd = CommandBuilder::new(&exe);
+        if !host.is_empty() {
+            cmd.arg(&entry);
+        }
         cmd.args(&self.cfg.args);
         cmd.cwd(&self.cfg.server_dir);
         cmd.env("TERM", "xterm-256color");
@@ -313,6 +318,12 @@ impl Supervisor {
         drop(inner);
         self.panel_line(&format!("server exited with code {code}"));
         tracing::info!(code, intentional, "server exited");
+        if code == 127 && self.cfg.dotnet.trim().is_empty() {
+            self.panel_line(
+                "exit code 127: the server launcher could not be executed. On NixOS (without nix-ld) or musl-based systems, \
+                 set dotnet = \"dotnet\" in panel.toml to run it as `dotnet SPT.Server.Linux.dll`.",
+            );
+        }
 
         if !intentional && self.cfg.auto_restart {
             let me = self.clone();
