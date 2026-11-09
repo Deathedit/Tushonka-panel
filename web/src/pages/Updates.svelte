@@ -42,8 +42,12 @@
 
   async function update() {
     const l = info.latest;
-    const msg =
-      `Update the server to ${l.tag}?\n\n` +
+    const msg = !info.present
+      ? `Install the SP-Tushonka server ${l.tag} into ${info.server_dir}?\n\n` +
+        `• Downloads ${bytes(l.asset_size)} and verifies its SHA-256\n` +
+        `• Unpacks the server files into the empty folder\n` +
+        `• Does not start the server: press Start when it is done`
+      : `Update the server to ${l.tag}?\n\n` +
       `• Downloads ${bytes(l.asset_size)} and verifies its SHA-256\n` +
       `• Stops the server if it is running, then starts it again\n` +
       `• Current program files are moved to a backup you can roll back to\n` +
@@ -52,6 +56,15 @@
     try {
       await api.post('/api/update/start', { tag: l.tag });
       load();
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
+  async function startServer() {
+    try {
+      await api.post('/api/server/start');
+      location.hash = '#/console';
     } catch (e) {
       toasts.error(e);
     }
@@ -119,8 +132,8 @@
   <div class="versions panel">
     <div class="ver">
       <span class="lbl">Installed</span>
-      <b>{short(info.installed)}</b>
-      <span class="cm">{info.installed ?? 'not detected'}</span>
+      <b>{info.present ? short(info.installed) : 'none'}</b>
+      <span class="cm">{info.present ? (info.installed ?? 'version not detected') : `no server in ${info.server_dir}`}</span>
     </div>
     <div class="ver">
       <span class="lbl">Latest</span>
@@ -128,7 +141,19 @@
       <span class="cm">{info.latest ? new Date(info.latest.published_at).toLocaleDateString() : info.check_error ? 'check failed' : 'not checked yet'}</span>
     </div>
     <div class="ver act">
-      {#if info.available}
+      {#if !info.present}
+        {#if info.install_blocker}
+          <span class="tag err">Cannot install here</span>
+          <span class="err">{info.install_blocker}</span>
+        {:else if info.latest}
+          <span class="tag acc">Not installed</span>
+          <button class="btn pri" type="button" onclick={update} disabled={job?.running || !info.latest.sha256}>Install {info.latest.tag}</button>
+          {#if !info.latest.sha256}<span class="err">No published checksum: refusing to install.</span>{/if}
+        {:else}
+          <span class="tag acc">Not installed</span>
+          <span class="cm">Press Check now to find the latest release.</span>
+        {/if}
+      {:else if info.available}
         <span class="tag acc">Update available</span>
         <button class="btn pri" type="button" onclick={update} disabled={job?.running || !info.latest?.sha256}>Update to {info.latest.tag}</button>
         {#if !info.latest?.sha256}<span class="err">No published checksum: refusing to install.</span>{/if}
@@ -143,7 +168,7 @@
   {#if showJob}
     <section class="job panel" aria-live="polite">
       <div class="jhead">
-        <span class="lbl">{job.kind === 'rollback' ? 'Rollback' : 'Update'}</span>
+        <span class="lbl">{job.kind === 'rollback' ? 'Rollback' : job.kind === 'install' ? 'Install' : 'Update'}</span>
         <strong class:err={!!job.error}>{job.stage}</strong>
         <span class="spacer"></span>
         {#if job.running}<span class="tag acc">Running</span>{:else if job.error}<span class="tag err">Failed</span>{:else}<span class="tag ok">Done</span>{/if}
@@ -156,7 +181,7 @@
       {#if job.result}
         {@const r = job.result}
         <div class="result">
-          <p><b>{short(r.from)} → {short(r.to)}</b> · server: <span class:okc={r.server === 'running'} class:err={r.server === 'failed'}>{r.server}</span></p>
+          <p><b>{r.from ? `${short(r.from)} → ${short(r.to)}` : `Installed ${short(r.to)}`}</b> · server: <span class:okc={r.server === 'running'} class:err={r.server === 'failed'}>{r.server}</span></p>
           {#if job.kind === 'update'}
             <p class="muted">{r.configs_updated} unedited config{r.configs_updated === 1 ? '' : 's'} replaced with the new defaults.</p>
             {#if r.configs_kept.length}
@@ -170,7 +195,12 @@
           {/if}
           {#each r.warnings as w}<p class="warn">{w}</p>{/each}
           <div class="row">
-            <button class="btn" type="button" onclick={() => rollback(r.backup, short(r.from))} disabled={job.running}>Roll back to {short(r.from)}</button>
+            {#if job.kind === 'install' && r.server === 'not started'}
+              <button class="btn pri" type="button" onclick={startServer}>Start server</button>
+            {/if}
+            {#if r.backup}
+              <button class="btn" type="button" onclick={() => rollback(r.backup, short(r.from))} disabled={job.running}>Roll back to {short(r.from)}</button>
+            {/if}
           </div>
         </div>
       {/if}

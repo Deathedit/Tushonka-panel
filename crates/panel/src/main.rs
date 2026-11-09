@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&cfg.data_dir).with_context(|| format!("creating {}", cfg.data_dir.display()))?;
     tracing::info!(server_dir = %cfg.server_dir.display(), "config loaded from {}", cfg_path.display());
     if !cfg.entry_file().is_file() {
-        tracing::warn!("server executable not found at {} (set server_dir / executable in {})", cfg.entry_file().display(), cfg_path.display());
+        tracing::warn!("server executable not found at {} (set server_dir / executable in {}, or install the server from the Updates page)", cfg.entry_file().display(), cfg_path.display());
     }
 
     let auth = Arc::new(auth::Auth::new(cfg.admin.clone()));

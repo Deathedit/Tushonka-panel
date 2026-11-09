@@ -13,6 +13,8 @@ A web panel for the [SP-Tushonka server](https://github.com/SP-Tushonka/server-c
   4. installs the new version and keeps configs you edited
   5. starts the server again
 
+  With an empty server folder, the same button installs the latest release from scratch instead (handy for a fresh Docker volume). It only installs into an empty folder, so it never overwrites anything; if the server sits one folder deeper (e.g. `SPT_Runtime/` from the full archive), the page says which folder to use.
+
   Edited configs are detected with the release's own `checks.dat` hashes. They keep your values and gain any keys the new version added. Every backup can be restored with one click, and a restore can itself be undone.
 - **Login**: an admin account is created on first run. Passwords are hashed with Argon2id, the session cookie is HttpOnly and SameSite=Strict, and requests from other origins are refused.
 

@@ -107,7 +107,7 @@
       {#if update?.job?.running}
         <a class="tag acc" href="#/updates">Updating…</a>
       {:else if update?.available}
-        <a class="tag acc" href="#/updates">Update {update.latest.tag} available</a>
+        <a class="tag acc" href="#/updates">{update.present ? `Update ${update.latest.tag} available` : `Install ${update.latest.tag}`}</a>
       {/if}
       <span class="spacer"></span>
       <button class="btn pri" type="button" onclick={() => control('start')} disabled={busy || alive || runState === 'stopping' || update?.job?.running}>
@@ -154,9 +154,10 @@
       </nav>
 
       <main class="main">
-        {#if info && !info.executable_found}
+        {#if info && !(update?.present ?? info.executable_found)}
           <div class="banner err">
-            <span>Server executable not found: {info.server_dir}/{info.executable}. Set server_dir in panel.toml.</span>
+            <span>No server in {info.server_dir}. {update?.install_blocker ?? 'Install it from Updates, or set server_dir in panel.toml.'}</span><span class="spacer"></span>
+            {#if page !== 'updates' && !update?.install_blocker}<a class="btn pri" href="#/updates">Install server</a>{/if}
           </div>
         {/if}
         {#if st?.awaiting_key}

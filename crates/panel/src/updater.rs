@@ -4,6 +4,9 @@
 //! move the current program files into a backup and the new ones into place (`user/` is never
 //! touched) -> carry over edited configs -> start the server again. Any backup can be rolled back.
 //!
+//! An empty server folder gets a fresh install of the latest release instead (no backup, nothing
+//! to carry over). It refuses to install into a folder that already holds other files.
+//!
 //! Edited configs are detected with the release's own manifest, `SPT_Data/checks.dat`
 //! (XXH3-64 per file): a config whose hash differs from the manifest was changed by the user.
 //! Those keep the user's values and only gain keys that the new version added.
@@ -48,7 +51,8 @@ pub struct ConfigMerge {
 pub struct UpdateResult {
     pub from: Option<String>,
     pub to: String,
-    pub backup: String,
+    /// Backup of the replaced files; `None` for a fresh install.
+    pub backup: Option<String>,
     /// Edited configs that were kept, with keys added from the new defaults.
     pub configs_kept: Vec<ConfigMerge>,
     /// Configs the user never edited: replaced by the new defaults.
@@ -141,16 +145,32 @@ impl Updater {
         version_in(&self.cfg.server_dir, &self.cfg.executable)
     }
 
+    /// Is there a server in `server_dir` at all (whether or not its version is readable)?
+    pub fn server_present(&self) -> bool {
+        let dir = &self.cfg.server_dir;
+        dir.join(&self.cfg.executable).is_file() || dir.join(format!("{}.dll", self.cfg.executable)).is_file()
+    }
+
+    /// Why a fresh install into `server_dir` is not allowed, if it is not.
+    pub fn install_blocker(&self) -> Option<String> {
+        install_blocker(&self.cfg.server_dir, &self.cfg.executable)
+    }
+
     pub fn snapshot(&self) -> serde_json::Value {
         let installed = self.installed_version();
+        let present = self.server_present();
+        let install_blocker = if present { None } else { self.install_blocker() };
         let st = self.state.lock().unwrap();
         let available = match (&st.latest, &installed) {
             (Some(l), Some(i)) => newer(&l.tag, i),
-            (Some(_), None) => true,
+            (Some(_), None) => !present,
             _ => false,
         };
         serde_json::json!({
             "installed": installed,
+            "present": present,
+            "server_dir": self.cfg.server_dir,
+            "install_blocker": install_blocker,
             "latest": st.latest,
             "available": available,
             "checked_at": st.checked_at,
@@ -241,17 +261,24 @@ impl Updater {
         if release.tag != tag {
             bail!("only the latest release ({}) can be installed", release.tag);
         }
-        self.begin("update")?;
+        let fresh = !self.server_present();
+        if fresh {
+            if let Some(why) = self.install_blocker() {
+                bail!(why);
+            }
+        }
+        self.begin(if fresh { "install" } else { "update" })?;
         let me = self.clone();
         tokio::spawn(async move {
-            let result = me.run_update(release).await;
+            let result = if fresh { me.run_install(release).await } else { me.run_update(release).await };
             me.finish(result);
         });
         Ok(())
     }
 
-    async fn run_update(&self, release: Release) -> Result<UpdateResult> {
-        let from = self.installed_version();
+    /// Downloads (or reuses), verifies and unpacks the release. Returns the staging folder and the
+    /// folder inside it that holds the server.
+    async fn fetch_release(&self, release: &Release) -> Result<(PathBuf, PathBuf)> {
         let expected = release.sha256.clone().context("the release has no published SHA-256, refusing to install an unverified archive")?;
         let updates = self.updates_dir();
         tokio::fs::create_dir_all(&updates).await?;
@@ -281,6 +308,30 @@ impl Updater {
         }
         let runtime = find_runtime(&staging, &self.cfg.executable)
             .with_context(|| format!("the archive contains no {}", self.cfg.executable))?;
+        Ok((staging, runtime))
+    }
+
+    async fn run_install(&self, release: Release) -> Result<UpdateResult> {
+        let updates = self.updates_dir();
+        let (staging, runtime) = self.fetch_release(&release).await?;
+        let to = version_in(&runtime, &self.cfg.executable).unwrap_or_else(|| release.tag.clone());
+        self.note(format!("version: {to}"));
+        // Checked again: the folder could have changed during the download.
+        if let Some(why) = self.install_blocker() {
+            bail!(why);
+        }
+        self.stage(&format!("Installing into {}", self.cfg.server_dir.display()));
+        self.install_fresh(&runtime)?;
+        make_executable(&self.cfg.server_dir.join(&self.cfg.executable));
+        let _ = remove_own_dir(&staging, &updates);
+        self.note("installed. Start the server to finish its first-run setup.");
+        Ok(UpdateResult { from: None, to, backup: None, configs_kept: vec![], configs_updated: 0, warnings: vec![], server: "not started".into() })
+    }
+
+    async fn run_update(&self, release: Release) -> Result<UpdateResult> {
+        let from = self.installed_version();
+        let updates = self.updates_dir();
+        let (staging, runtime) = self.fetch_release(&release).await?;
         let to = version_in(&runtime, &self.cfg.executable).unwrap_or_else(|| release.tag.clone());
         self.note(format!("new version: {to}"));
 
@@ -331,7 +382,38 @@ impl Updater {
         if server == "failed" {
             warnings.push("The server did not start cleanly on the new version. Check the console; you can roll back from Updates.".into());
         }
-        Ok(UpdateResult { from, to, backup: name, configs_kept, configs_updated, warnings, server })
+        Ok(UpdateResult { from, to, backup: Some(name), configs_kept, configs_updated, warnings, server })
+    }
+
+    /// Moves the release into an empty server folder. The release's `user/` is only used when the
+    /// folder has none yet. On error, everything moved so far goes back to staging.
+    fn install_fresh(&self, runtime: &Path) -> Result<()> {
+        let server = &self.cfg.server_dir;
+        std::fs::create_dir_all(server)?;
+        let mut names: Vec<String> = std::fs::read_dir(runtime)?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        let mut moved: Vec<String> = Vec::new();
+        let result = (|| -> Result<()> {
+            for n in &names {
+                let dest = server.join(n);
+                if dest.exists() || dest.is_symlink() {
+                    if n == "user" {
+                        continue;
+                    }
+                    bail!("{} appeared during the install", dest.display());
+                }
+                fsutil::rename_or_copy(&runtime.join(n), &dest)?;
+                moved.push(n.clone());
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            for n in moved.iter().rev() {
+                let _ = fsutil::rename_or_copy(&server.join(n), &runtime.join(n));
+            }
+            return Err(e.context("installing failed; the folder was left as it was"));
+        }
+        Ok(())
     }
 
     async fn download(&self, url: &str, dest: &Path, size: u64) -> Result<()> {
@@ -565,7 +647,7 @@ impl Updater {
         Ok(UpdateResult {
             from: current,
             to: manifest.from.unwrap_or_default(),
-            backup: name,
+            backup: Some(name),
             configs_kept: vec![],
             configs_updated: 0,
             warnings: vec![],
@@ -636,6 +718,35 @@ fn minor_changed(from: Option<&str>, to: &str) -> bool {
     let Some(from) = from else { return false };
     let (a, b) = (numbers(from), numbers(to));
     a.get(..2) != b.get(..2)
+}
+
+/// Why a fresh install into `dir` is not allowed, if it is not. Only an empty or missing folder
+/// qualifies (a `user/` folder may already be there), so nothing is ever overwritten.
+fn install_blocker(dir: &Path, executable: &str) -> Option<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return None };
+    let mut others: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "user" && n != "lost+found")
+        .collect();
+    if others.is_empty() {
+        return None;
+    }
+    if let Some(found) = find_runtime(dir, executable) {
+        return Some(format!(
+            "The server is in {}. Set server_dir to that folder (with Docker, mount that folder at the server path).",
+            found.display()
+        ));
+    }
+    others.sort();
+    let more = if others.len() > 5 { format!(" and {} more", others.len() - 5) } else { String::new() };
+    others.truncate(5);
+    Some(format!(
+        "{} has no {} but is not empty ({}{more}). A fresh install only goes into an empty folder, so nothing of yours is overwritten.",
+        dir.display(),
+        executable,
+        others.join(", ")
+    ))
 }
 
 fn find_runtime(staging: &Path, executable: &str) -> Option<PathBuf> {
@@ -767,6 +878,20 @@ mod tests {
         assert_eq!(r.sha256.as_deref(), Some("abc"));
         assert_eq!(r.asset_name, "SPT-4.1.6.7z");
         assert!(parse_release(&json!({ "assets": [] })).is_err());
+    }
+
+    #[test]
+    fn fresh_install_only_into_empty_folder() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("srv");
+        assert!(install_blocker(&dir, "SPT.Server.Linux").is_none(), "missing folder is fine");
+        std::fs::create_dir_all(dir.join("user/profiles")).unwrap();
+        assert!(install_blocker(&dir, "SPT.Server.Linux").is_none(), "only user/ is fine");
+        std::fs::create_dir_all(dir.join("SPT_Runtime")).unwrap();
+        std::fs::write(dir.join("SPT_Runtime/SPT.Server.Linux"), b"").unwrap();
+        assert!(install_blocker(&dir, "SPT.Server.Linux").unwrap().contains("SPT_Runtime"), "points at the nested server");
+        std::fs::remove_file(dir.join("SPT_Runtime/SPT.Server.Linux")).unwrap();
+        assert!(install_blocker(&dir, "SPT.Server.Linux").unwrap().contains("not empty"));
     }
 
     #[test]
