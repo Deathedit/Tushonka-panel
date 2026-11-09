@@ -13,6 +13,8 @@ FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+# bridge/dist/TushonkaPanelBridge.dll (if present, e.g. from CI or `make bridge`) is bundled into the binary.
+COPY bridge bridge
 COPY --from=web /src/web/dist web/dist
 RUN cargo build --release --locked
 

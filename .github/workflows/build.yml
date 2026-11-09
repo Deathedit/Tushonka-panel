@@ -1,0 +1,231 @@
+name: Build
+
+# Every push and pull request: bridge mod + panel (tests, static Linux binary) + Docker image build.
+# Tags like v0.2.0: additionally publish a GitHub release and push the image to ghcr.io.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      spt_tag:
+        description: "SP-Tushonka/build release to build the bridge against (empty = latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SPT_REPO: SP-Tushonka/build
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bridge:
+    name: Bridge mod (C#)
+    runs-on: ubuntu-latest
+    outputs:
+      spt_tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # The bridge is compiled against the server DLLs of an official release, so it matches
+      # exactly what players run.
+      - name: Pick SP-Tushonka release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ inputs.spt_tag }}
+        run: |
+          tag="${WANTED:-$(gh api "repos/$SPT_REPO/releases/latest" --jq .tag_name)}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building against $SPT_REPO $tag"
+
+      - name: Cache server DLLs
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: spt-lib
+          key: spt-lib-${{ steps.release.outputs.tag }}
+
+      - name: Download server DLLs
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$SPT_REPO" --pattern '*.7z' --dir release
+          # Checksum published by GitHub for the asset.
+          expected="$(gh api "repos/$SPT_REPO/releases/tags/$TAG" --jq '.assets[] | select(.name | endswith(".7z")) | .digest' | sed 's/^sha256://')"
+          if [ -z "$expected" ]; then echo "release asset has no published sha256" >&2; exit 1; fi
+          archive=(release/*.7z)
+          echo "$expected  ${archive[0]}" | sha256sum -c -
+          7z x -y -orelease/x "${archive[0]}" '-ir!SPT_Runtime/*.dll' > /dev/null
+          mkdir -p spt-lib
+          mv release/x/SPT_Runtime/*.dll spt-lib/
+          find spt-lib -name '*.dll' | sort
+
+      - name: Build
+        working-directory: bridge/TushonkaPanelBridge
+        run: dotnet build -c Release -p:SptDir="$GITHUB_WORKSPACE/spt-lib" -warnaserror
+
+      # Same layout as a mod archive, so it installs through the panel's Mods page.
+      - name: Package
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir -p bridge/dist pkg/user/mods/TushonkaPanelBridge
+          cp bridge/TushonkaPanelBridge/bin/Release/net10.0/TushonkaPanelBridge.dll bridge/dist/
+          cp bridge/dist/TushonkaPanelBridge.dll pkg/user/mods/TushonkaPanelBridge/
+          (cd pkg && zip -qr "../TushonkaPanelBridge-spt-$TAG.zip" user)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-dll
+          path: bridge/dist/TushonkaPanelBridge.dll
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-mod-zip
+          path: TushonkaPanelBridge-spt-*.zip
+          if-no-files-found: error
+
+  panel:
+    name: Panel (Rust + Svelte)
+    runs-on: ubuntu-latest
+    needs: bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      # Bundled into the binary so the panel can install the bridge with one click.
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge-dll
+          path: bridge/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+          components: clippy
+
+      - name: Install musl tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      # Statically linked: runs on any x86_64 Linux, including NixOS and Alpine.
+      - name: Build release (static musl)
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Package
+        run: |
+          name="tushonka-panel-${GITHUB_REF_NAME//\//-}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/x86_64-unknown-linux-musl/release/tushonka-panel "dist/$name/"
+          cp panel.example.toml README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          file "dist/$name/tushonka-panel"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panel-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: bridge
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge-dll
+          path: bridge/dist
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [bridge, panel, docker]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPT_TAG: ${{ needs.bridge.outputs.spt_tag }}
+        run: |
+          ls -la artifacts
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            --notes "Bridge built against SP-Tushonka $SPT_TAG. Docker: \`ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}\`" \
+            artifacts/*.tar.gz artifacts/*.sha256 artifacts/TushonkaPanelBridge-*.zip

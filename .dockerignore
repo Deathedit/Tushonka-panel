@@ -7,3 +7,5 @@ panel.toml
 data
 spt
 .git
+bridge/TushonkaPanelBridge/bin
+bridge/TushonkaPanelBridge/obj

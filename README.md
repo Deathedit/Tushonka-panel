@@ -60,6 +60,18 @@ docker compose up -d --build
 
 The panel is served on port 8080 and the game server on 6969. `docker stop` gives the server time to save before the container exits.
 
+## GitHub Actions
+
+`.github/workflows/build.yml` runs on every push and pull request:
+
+| Job | What it does |
+|---|---|
+| Bridge mod | Downloads the latest SP-Tushonka release, verifies its SHA-256, and builds `TushonkaPanelBridge` against the release's own server DLLs. Produces `TushonkaPanelBridge-spt-<version>.zip`, which installs through the panel's Mods page. |
+| Panel | Builds the web UI, runs clippy and tests, and builds a **static musl binary** (runs on any x86_64 Linux, including NixOS) with the bridge bundled. |
+| Docker image | Builds the image, with the bridge bundled. |
+
+Build outputs are attached to each run as artifacts. Pushing a tag such as `v0.2.0` also creates a GitHub release with the binary, checksum and bridge zip, and pushes the image to `ghcr.io/<owner>/<repo>`. To build the bridge against a specific SP-Tushonka version, start the workflow manually and fill in `spt_tag`.
+
 ## Development
 
 ```sh
