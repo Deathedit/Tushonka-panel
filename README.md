@@ -70,7 +70,14 @@ The panel is served on port 8080 and the game server on 6969. `docker stop` give
 | Panel | Builds the web UI, runs clippy and tests, and builds a **static musl binary** (runs on any x86_64 Linux, including NixOS) with the bridge bundled. |
 | Docker image | Builds the image, with the bridge bundled. |
 
-Build outputs are attached to each run as artifacts. Pushing a tag such as `v0.2.0` also creates a GitHub release with the binary, checksum and bridge zip, and pushes the image to `ghcr.io/<owner>/<repo>`. To build the bridge against a specific SP-Tushonka version, start the workflow manually and fill in `spt_tag`.
+Build outputs are attached to each run as artifacts. To build the bridge against a specific SP-Tushonka version, start the workflow manually and fill in `spt_tag`.
+
+Publishing is automatic on pushes to the default branch:
+
+- The Docker image is pushed to `ghcr.io/<owner>/<repo>:latest` (plus a `sha-…` tag).
+- If the `version` in `crates/panel/Cargo.toml` has no release yet, the workflow creates the tag `v<version>`, a GitHub release with the binary, checksum and bridge zip, and the image tags `:<version>` and `:<major>.<minor>`. To release, bump the version and push.
+
+GitHub creates the container package as private the first time. To let anyone pull without logging in, set it to public once under the package's settings (Packages → tushonka-panel → Package settings → Change visibility).
 
 ## Development
 
